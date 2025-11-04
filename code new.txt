@@ -1,0 +1,477 @@
+.global _start
+
+_start:
+	
+	MOV V2, #0 //rotation offset
+	MOV V3, #0 //reversal bit (0 for left, 1 for right rotation)
+    MOV V4, #0              // V4 = The LED Counter
+    MOV V5, #-1             // Force message load on first loop
+
+    // Clear all outputs for a clean start
+    MOV A1, #0x3F           
+    BL HEX_clear_ASM
+    MOV A1, #0              
+    BL write_LEDs_ASM
+    BL PB_clear_edgecp_ASM  
+
+// --- Main Program Loop ---
+main_loop:
+    // 1. Read the slider switches
+    BL read_slider_switches_ASM // Current switch value is in A1
+
+    // 2. Check if the switch value has changed
+    CMP A1, V5
+    BEQ check_buttons       // If not, skip message selection
+
+    // -- Switch HAS changed: Reset the state --
+    MOV V5, A1              // Update previous state
+    MOV V4, #0             // Reset LED count to 0
+	MOV V2, #0
+	MOV V3, #0
+	
+// -- Select the new message pointer based on the value from the switches --
+    MOV V1, #0 
+    
+    CMP A1, #0x00
+    LDREQ V1, =MSG_C0FFEE
+    BEQ check_buttons
+
+    CMP A1, #0x01
+    LDREQ V1, =MSG_CAFE5
+    BEQ check_buttons
+
+    CMP A1, #0x02
+    LDREQ V1, =MSG_CAb5
+    BEQ check_buttons
+
+    CMP A1, #0x04
+    LDREQ V1, =MSG_ACE
+	BEQ check_buttons
+
+    // Otherwise, it's an invalid message
+    MOV V1, #0
+
+// --- START OF NEW, SIMPLIFIED BUTTON LOGIC ---
+check_buttons:
+    // If no message is displayed, buttons do nothing.
+    CMP V1, #0
+    BEQ draw_outputs
+
+    // --- First, handle PB2 to flip the reversal bit ---
+    MOV A1, #0x04           // Bitmask for PB2
+    BL PB_edgecp_is_pressed_ASM
+    CMP A1, #1
+    // If pressed, EOR (Exclusive OR) V3 with 1. This flips 0->1 and 1->0.
+    EOREQ V3, V3, #1
+
+    // --- Now, check SPECIFICALLY for PB3 to change the offset ---
+    MOV A1, #0x08           // Bitmask for PB3
+    BL PB_edgecp_is_pressed_ASM
+    CMP A1, #1
+    // If PB3 was not pressed, we are done with the logic for this loop.
+    BNE draw_outputs
+
+    // -- PB3 WAS pressed: Execute your rotation logic --
+    
+    // Check the reversal bit (V3) to decide what to do.
+    CMP V3, #0
+    BEQ do_decrement        // If reversal bit is 0, branch to decrement logic.
+    
+    // The reversal bit must be 1, so we do the increment logic.
+    ADD V2, V2, #1          // Add to the offset
+    B rotation_logic_done   // Skip past the decrement logic.
+
+do_decrement:
+    // The reversal bit is 0, so we do the decrement logic.
+    SUB V2, V2, #1          // Decrement the offset.
+    
+    // Now, check for your special wrap-around condition.
+    CMP V2, #-7             // Has the offset reached -7?
+    MOVEQ V2, #0            // If yes, make it 0.
+
+rotation_logic_done:
+    // This label is where both paths (increment and decrement) meet up.
+    // Now that the offset has been updated, we increment the LED counter.
+    ADD V4, V4, #1
+draw_outputs:
+    // Clear the edge capture register for ALL buttons for the next loop.
+    BL PB_clear_edgecp_ASM
+// --- END OF NEW, SIMPLIFIED BUTTON LOGIC ---
+
+    // 3. Draw the display (This section is your original, working code)
+    CMP V1, #0
+    BEQ clear_screen
+    
+    MOV A1, V1
+	MOV A2, V2
+    BL DISPLAY_MESSAGE_ASM
+    B draw_leds
+
+clear_screen:
+    MOV A1, #0x3F
+    BL HEX_clear_ASM
+
+draw_leds:
+    // 4. Update the LEDs
+    LDR R0, =2047
+    CMP V4, R0
+    BHI set_max_leds
+    MOV A1, V4
+    B write_led_value
+
+set_max_leds:
+    // Correct value for all 10 LEDs (0-9) is 0x3FF
+    LDR A1, =0x3FF
+    
+write_led_value:
+    BL write_LEDs_ASM
+    
+    B main_loop
+
+
+DISPLAY_MESSAGE_ASM:
+    PUSH {V1-V6, LR}      // Save extra registers for offset math
+    MOV V1, A1            // Message pointer
+    MOV V2, #0            // Message index (0–5)
+    MOV V5, A2            // Offset (-5 to +5)
+    MOV V6, #6            // Number of HEX displays
+display_loop_offset:
+    LDRB V3, [V1, V2]     // Load current character from message
+    CMP V3, #255
+    BEQ clear_this_digit
+
+    // --- Compute target HEX display position with offset ---
+    // position = (5 - V2 + offset) mod 6
+    MOV V4, #5
+    SUB V4, V4, V2
+    ADD V4, V4, V5        // Add offset (can be negative)
+    
+    // handle wrapping manually
+wrap_left:
+    CMP V4, #0
+    BGE wrap_right
+    ADD V4, V4, #6        // If <0, wrap around
+    B wrap_done
+wrap_right:
+    CMP V4, #6
+    BLT wrap_done
+    SUB V4, V4, #6        // If >=6, wrap around
+wrap_done:
+
+    // --- Prepare mask for that specific HEX digit ---
+    MOV A1, #1
+    LSL A1, A1, V4
+
+    // --- Write the character ---
+    MOV A2, V3
+    BL HEX_write_ASM
+    B next_iter
+
+clear_this_digit:
+    // 255 → clear target digit at same offset logic
+    MOV V4, #5
+    SUB V4, V4, V2
+    ADD V4, V4, V5
+    // Same wrapping
+wrap_left_clr:
+    CMP V4, #0
+    BGE wrap_right_clr
+    ADD V4, V4, #6
+    B wrap_done_clr
+wrap_right_clr:
+    CMP V4, #6
+    BLT wrap_done_clr
+    SUB V4, V4, #6
+wrap_done_clr:
+    MOV A1, #1
+    LSL A1, A1, V4
+    BL HEX_clear_ASM
+
+next_iter:
+    ADD V2, V2, #1
+    CMP V2, #6
+    BLT display_loop_offset
+
+    POP {V1-V6, PC}
+
+
+
+
+
+
+
+
+stop:
+    b stop
+
+
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+
+
+
+
+
+
+
+	
+
+.data
+MSG_C0FFEE: .byte 12, 0, 15, 15, 14, 14//,255
+MSG_CAFE5:  .byte 12, 10, 15, 14, 5, 255
+MSG_CAb5:   .byte 12, 10, 11, 5, 255, 255
+MSG_ACE:    .byte 10, 12, 14, 255, 255, 255
+
+.text
+
+
+
+
+.equ HEX_BASE_ADDR, 0xFF200020
+.equ HEX_BASE_ADDR_4_5, 0xFF200030
+.equ PB_DATA_ADDR, 0xFF200050
+.equ PB_EDGECP_ADDR, 0xFF20005C
+.equ PB_INTMASK_ADDR, 0xFF200058
+.equ SW_ADDR, 0xFF200040
+.equ LED_ADDR, 0xFF200000
+
+HEX_CODES:
+	.byte 0b00111111, 0b00000110, 0b01011011, 0b01001111 // 0-3
+	.byte 0b01100110, 0b01101101, 0b01111101, 0b00000111 // 4-7
+ 	.byte 0b01111111, 0b01101111, 0b01110111, 0b01111100 // 8-b
+	.byte 0b00111001, 0b01011110, 0b01111001, 0b01110001 // C-F
+
+
+
+
+
+
+
+
+
+
+
+
+
+read_PB_data_ASM:
+	LDR A2, =PB_DATA_ADDR
+	LDR A1, [A2]
+	BX LR
+
+
+
+
+
+PB_data_is_pressed_ASM:
+	LDR A2, =PB_DATA_ADDR
+	LDR A3, [A2] 
+	
+	ANDS A3, A3, A1
+	BNE data_pressed
+
+data_not_pressed:
+	MOV A1, #0
+	B done
+
+data_pressed:
+	MOV A1, #1
+
+done:	
+	BX LR 
+
+
+
+
+read_PB_edgecp_ASM:
+	LDR A2, =PB_EDGECP_ADDR
+	LDR A1, [A2]
+	AND A1, A1, #0xF
+	BX LR
+
+
+
+
+
+PB_edgecp_is_pressed_ASM:
+
+	LDR A2, =PB_EDGECP_ADDR
+    LDR A3, [A2]
+	  
+	ANDS A3, A3, A1
+	BNE edge_pressed
+
+edge_not_pressed:
+	MOV A1, #0
+	B edge_done
+
+edge_pressed:
+	MOV A1, #1
+
+
+edge_done:	
+	BX LR
+
+PB_clear_edgecp_ASM:
+	LDR A2, =PB_EDGECP_ADDR
+	LDR A1, [A2]
+	STR A1, [A2]
+	BX LR
+
+
+enable_PB_INT_ASM:
+	LDR A2, =PB_INTMASK_ADDR
+	LDR A3, [A2]
+	ORR A3, A3, A1
+	STR A3, [A2]
+	BX LR
+
+
+
+
+disable_PB_INT_ASM:
+	LDR A2, =PB_INTMASK_ADDR
+	LDR A3, [A2]
+	BIC A3, A3, A1
+	STR A3, [A2]
+	BX LR
+
+
+HEX_clear_ASM:
+	PUSH {V1,V2,LR} 
+	MOV V1, #0 //i=0
+
+loop_clr:
+	MOV A3, #1
+	LSL A3, A3, V1
+	ANDS A4, A1, A3
+	BEQ skip_clearing // if not on skip clearing
+	
+	CMP V1, #4
+	BLT clr_hex0_3
+
+clr_hex4_5: // handle HEX4 and HEX5
+	LDR V2, =HEX_BASE_ADDR_4_5
+	SUB A3, V1, #4
+	ADD A3, V2, A3
+	B do_clear_store
+
+clr_hex0_3: 
+	LDR V2, =HEX_BASE_ADDR
+	ADD A3, V2, V1
+
+
+do_clear_store:
+	MOV A2, #0
+	STRB A2, [A3]
+skip_clearing:
+	ADD V1, V1, #1
+	CMP V1,#6
+	BLT loop_clr
+	POP {V1,V2,PC}  
+
+
+
+
+HEX_flood_ASM:
+	PUSH {V1,V2,LR} 
+	MOV V1, #0 //i
+
+loop_fld:
+	MOV A3, #1
+	LSL A3, A3, V1
+	ANDS A4, A1, A3
+	BEQ skip_flooding
+	
+	CMP V1, #4
+	BLT fld_hex0_3
+
+fld_hex4_5:
+	LDR V2, =HEX_BASE_ADDR_4_5
+	SUB A3, V1, #4
+	ADD A3, V2, A3
+	B do_flood_store
+
+fld_hex0_3: 
+	LDR V2, =HEX_BASE_ADDR
+	ADD A3, V2, V1
+do_flood_store:
+	MOV A2, #0xFF
+	STRB A2, [A3]
+skip_flooding:
+	ADD V1, V1, #1
+	CMP V1, #6
+	BLT loop_fld
+	
+	POP {V1,V2,PC}
+
+
+
+
+
+HEX_write_ASM:
+	PUSH {V1,V2,LR} 
+	LDR A3, =HEX_CODES
+	
+	
+	ADD A3, A3, A2
+	LDRB A4, [A3]
+	MOV V1, #0 //i
+
+
+loop_write:
+	MOV A3, #1
+	LSL A3, A3, V1
+	TST A1, A3
+	BEQ skip_writing 
+	CMP V1, #4
+	BLT write_hex0_3
+
+write_hex4_5:
+	LDR V2, =HEX_BASE_ADDR_4_5
+	SUB A3, V1, #4
+	ADD A3, V2, A3
+	B do_write_store
+
+
+write_hex0_3: 
+	LDR V2, =HEX_BASE_ADDR
+	ADD A3, V2, V1
+do_write_store:
+	STRB A4, [A3]
+
+skip_writing:
+	ADD V1, V1, #1
+	CMP V1, #6
+	BLT loop_write
+	POP {V1,V2, PC}
+
+
+
+
+
+
+
+
+
+read_slider_switches_ASM:
+    LDR A2, =SW_ADDR
+    LDR A1, [A2]
+    BX LR
+write_LEDs_ASM:
+    LDR A2, =LED_ADDR
+    STR A1, [A2]
+    BX LR
