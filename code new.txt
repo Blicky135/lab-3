@@ -78,7 +78,10 @@ check_buttons:
     BEQ do_decrement        // If reversal bit is 0, branch to decrement logic.
     
     // The reversal bit must be 1, so we do the increment logic.
-    ADD V2, V2, #1          // Add to the offset
+    
+	ADD V2, V2, #1          // Add to the offset
+	CMP V2, #7             // Has the offset reached -7?
+    MOVEQ V2, #0
     B rotation_logic_done   // Skip past the decrement logic.
 
 do_decrement:
