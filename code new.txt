@@ -54,7 +54,9 @@ main_loop:
 // --- START OF NEW, SIMPLIFIED BUTTON LOGIC ---
 check_buttons:
     // If no message is displayed, buttons do nothing.
-    CMP V1, #0
+
+	
+	CMP V1, #0
     BEQ draw_outputs
 
     // --- First, handle PB2 to flip the reversal bit ---
@@ -80,7 +82,7 @@ check_buttons:
     // The reversal bit must be 1, so we do the increment logic.
     
 	ADD V2, V2, #1          // Add to the offset
-	CMP V2, #7             // Has the offset reached -7?
+	CMP V2, #6            // Has the offset reached -7?
     MOVEQ V2, #0
     B rotation_logic_done   // Skip past the decrement logic.
 
@@ -89,7 +91,7 @@ do_decrement:
     SUB V2, V2, #1          // Decrement the offset.
     
     // Now, check for your special wrap-around condition.
-    CMP V2, #-7             // Has the offset reached -7?
+    CMP V2, #-6             // Has the offset reached -7?
     MOVEQ V2, #0            // If yes, make it 0.
 
 rotation_logic_done:
@@ -116,7 +118,7 @@ clear_screen:
 
 draw_leds:
     // 4. Update the LEDs
-    LDR R0, =2047
+    LDR R0, =1023
     CMP V4, R0
     BHI set_max_leds
     MOV A1, V4
