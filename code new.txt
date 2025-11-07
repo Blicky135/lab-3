@@ -3,7 +3,7 @@
 _start:
 	
 	MOV V2, #0 //rotation offset
-	MOV V3, #0 //reversal bit (0 for left, 1 for right rotation)
+	MOV V3, #1 //reversal bit (0 for left, 1 for right rotation)
     MOV V4, #0              // V4 = The LED Counter
     MOV V5, #-1             // Force message load on first loop
 
@@ -27,7 +27,7 @@ main_loop:
     MOV V5, A1              // Update previous state
     MOV V4, #0             // Reset LED count to 0
 	MOV V2, #0
-	MOV V3, #0
+	
 	
 // -- Select the new message pointer based on the value from the switches --
     MOV V1, #0 
